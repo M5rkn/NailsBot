@@ -9,7 +9,17 @@ from app.keyboards.common import MenuCB
 
 class TimeCB(CallbackData, prefix="time"):
     date: str  # YYYY-MM-DD
-    time: str  # HH:MM
+    time: str  # HH-MM (вместо HH:MM)
+
+    @classmethod
+    def pack_time(cls, date: str, time: str) -> str:
+        """Упаковать время, заменив : на -"""
+        time_safe = time.replace(":", "-")
+        return cls(date=date, time=time_safe).pack()
+
+    def unpack_time(self) -> str:
+        """Распаковать время, заменив - на :"""
+        return self.time.replace("-", ":")
 
 
 class BookingCB(CallbackData, prefix="book"):
@@ -19,7 +29,7 @@ class BookingCB(CallbackData, prefix="book"):
 def times_kb(date: str, times: list[str]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for t in times:
-        kb.button(text=f"🕒 {t}", callback_data=TimeCB(date=date, time=t).pack())
+        kb.button(text=f"🕒 {t}", callback_data=TimeCB.pack_time(date=date, time=t))
     kb.adjust(2)
     kb.row()
     kb.button(text="⬅️ В меню", callback_data=MenuCB(action="menu").pack())

@@ -3,14 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
 from app.constants import DATE_FMT, MAX_DAYS_AHEAD
 from app.db.sqlite import Database
 from app.fsm.states import AdminStates
-from app.keyboards.admin import AdminCB, AdminTimeCB, admin_existing_slots_kb, admin_menu_kb, admin_times_grid
+from app.keyboards.admin import AdminCB, AdminServiceCB, AdminTimeCB, admin_existing_slots_kb, admin_menu_kb, admin_times_grid, services_admin_kb
 from app.keyboards.calendar import CalendarRange, CalCB, build_calendar
 from app.keyboards.common import MenuCB
 from app.scheduler.reminders import ReminderScheduler
@@ -45,15 +45,20 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         return out
 
     async def publish_schedule(call: CallbackQuery, date_s: str) -> None:
+        is_closed = await db.is_day_closed(date_s)
+        if is_closed:
+            await call.bot.send_message(chat_id=cfg.schedule_channel_id, text=f"⛔ <b>{date_s}</b> — день закрыт")
+            return
+        
         slots = await db.list_slots(date_s)
         bookings = await db.list_bookings_by_date(date_s)
-        booked_by = {b.id: b.name for b in bookings}
-        text = format_schedule(date_s, slots, booked_by)
+        booked_by = {b.id: {"name": b.name, "service": b.service_name} for b in bookings}
+        text = format_schedule(date_s, slots, booked_by, public=True)  # Публичная версия без имён
         await call.bot.send_message(chat_id=cfg.schedule_channel_id, text=text)
 
     # ---- open admin panel ----
 
-    @router.callback_query(MenuCB.filter(lambda c: c.action == "admin"))
+    @router.callback_query(MenuCB.filter(F.action == "admin"))
     async def admin_entry(call: CallbackQuery, state: FSMContext) -> None:
         if not is_admin(call.from_user.id):
             await call.answer("Нет доступа.", show_alert=True)
@@ -63,7 +68,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         await call.message.answer("🛠 <b>Админ-панель</b>", reply_markup=admin_menu_kb())  # type: ignore[union-attr]
         await call.answer()
 
-    @router.callback_query(AdminCB.filter(lambda c: c.action == "menu"))
+    @router.callback_query(AdminCB.filter(F.action == "menu"))
     async def admin_menu(call: CallbackQuery, state: FSMContext) -> None:
         if not is_admin(call.from_user.id):
             await call.answer("Нет доступа.", show_alert=True)
@@ -75,7 +80,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
 
     # ---- choose action -> calendar ----
 
-    @router.callback_query(AdminCB.filter(lambda c: c.action != "menu"))
+    @router.callback_query(AdminCB.filter(F.action != "menu"))
     async def admin_action(call: CallbackQuery, callback_data: AdminCB, state: FSMContext) -> None:
         if not is_admin(call.from_user.id):
             await call.answer("Нет доступа.", show_alert=True)
@@ -83,12 +88,29 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         action = callback_data.action
 
         rng = rng_today()
-        allowed = all_dates_in_range(rng)
+        
+        # Для добавления дня — все даты доступны
+        # Для просмотра расписания — даты где есть слоты
+        # Для остальных действий — даты со свободными слотами
+        if action == "add_day":
+            allowed = all_dates_in_range(rng)
+            dates_with_slots = None
+        elif action == "view":
+            start_s = rng.start.strftime(DATE_FMT)
+            end_s = rng.end.strftime(DATE_FMT)
+            dates_with_slots = set(await db.list_dates_with_slots(start_s, end_s))
+            allowed = set()  # Ни одна дата не доступна для выбора (только просмотр)
+        else:
+            start_s = rng.start.strftime(DATE_FMT)
+            end_s = rng.end.strftime(DATE_FMT)
+            allowed = set(await db.list_available_dates(start_s, end_s))
+            dates_with_slots = None
+        
         month = date(rng.start.year, rng.start.month, 1)
 
         await state.set_state(AdminStates.choosing_date)
         await state.update_data(admin_action=action)
-        cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=rng, title="Выберите дату")
+        cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=rng, title="Выберите дату", dates_with_slots=dates_with_slots)
 
         title_map = {
             "add_day": "➕ Добавить рабочий день",
@@ -98,25 +120,53 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             "del_slot": "🗑 Удалить слот",
             "cancel_booking": "❌ Отменить запись",
             "view": "📅 Просмотр расписания",
+            "services": "📋 Управление услугами",
         }
         title = title_map.get(action, "Выберите дату")
+        
+        # Обработка услуги
+        if action == "services":
+            services = await db.list_services(active_only=False)
+            await call.message.answer("<b>📋 Услуги</b>\n\nНажмите на услугу, чтобы включить/выключить её:", reply_markup=services_admin_kb(services))  # type: ignore[union-attr]
+            await call.answer()
+            return
+        
+        await state.set_state(AdminStates.choosing_date)
+        await state.update_data(admin_action=action)
+        cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=rng, title="Выберите дату")
         await call.message.answer(f"<b>{esc(title)}</b>\nВыберите дату:", reply_markup=cal_kb)  # type: ignore[union-attr]
         await call.answer()
 
     # ---- calendar (admin) ----
 
-    @router.callback_query(CalCB.filter(lambda c: c.scope == "admin"))
+    @router.callback_query(CalCB.filter(F.scope == "admin"))
     async def calendar_admin_cb(call: CallbackQuery, callback_data: CalCB, state: FSMContext) -> None:
         if not is_admin(call.from_user.id):
             await call.answer("Нет доступа.", show_alert=True)
             return
 
         rng = rng_today()
-        allowed = all_dates_in_range(rng)
+        data = await state.get_data()
+        action = str(data.get("admin_action", ""))
+        
+        # Получаем statuses для календаря
+        start_s = rng.start.strftime(DATE_FMT)
+        end_s = rng.end.strftime(DATE_FMT)
+        dates_with_slots = set(await db.list_dates_with_slots(start_s, end_s))
+        allowed = set(await db.list_available_dates(start_s, end_s))
+        
+        if action == "add_day":
+            # Для добавления дня — все даты доступны
+            allowed = all_dates_in_range(rng)
+            dates_with_slots = None
+        elif action == "view":
+            # Для просмотра — показываем все даты со слотами
+            pass  # already set above
+        # else: для остальных действий — только свободные даты
 
         if callback_data.d == 0 and callback_data.nav in {"prev", "next"}:
             month = date(callback_data.y, callback_data.m, 1)
-            cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=rng, title="Выберите дату")
+            cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=rng, title="Выберите дату", dates_with_slots=dates_with_slots)
             await call.message.edit_reply_markup(reply_markup=cal_kb)  # type: ignore[union-attr]
             await call.answer()
             return
@@ -126,8 +176,6 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             return
 
         selected = date(callback_data.y, callback_data.m, callback_data.d).strftime(DATE_FMT)
-        data = await state.get_data()
-        action = str(data.get("admin_action", ""))
 
         # ----- execute actions -----
         if action == "add_day":
@@ -178,27 +226,37 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             return
 
         if action == "cancel_booking":
-            slots = await db.list_slots(selected)
-            booked_times = [s["time"] for s in slots if int(s["is_booked"]) == 1]
-            if not booked_times:
+            # Получаем записи, а не слоты — чтобы не дублировать
+            bookings = await db.list_bookings_by_date(selected)
+            if not bookings:
                 await call.message.answer("На эту дату нет записей.", reply_markup=admin_menu_kb())  # type: ignore[union-attr]
                 await state.set_state(AdminStates.choosing_action)
                 await call.answer()
                 return
+            
+            # Показываем основные времена записей
+            booking_times = [b.time for b in bookings]
             await state.update_data(date=selected)
             await state.set_state(AdminStates.choosing_time)
             await call.message.answer(
                 f"Выберите запись для отмены (<b>{esc(selected)}</b>):",
-                reply_markup=admin_existing_slots_kb(selected, booked_times, mode="cancel"),
+                reply_markup=admin_existing_slots_kb(selected, booking_times, mode="cancel"),
             )  # type: ignore[union-attr]
             await call.answer()
             return
 
         if action == "view":
+            is_closed = await db.is_day_closed(selected)
+            if is_closed:
+                await call.message.answer(f"⛔ <b>{esc(selected)}</b> — день закрыт", reply_markup=admin_menu_kb())  # type: ignore[union-attr]
+                await state.set_state(AdminStates.choosing_action)
+                await call.answer()
+                return
+            
             slots = await db.list_slots(selected)
             bookings = await db.list_bookings_by_date(selected)
-            booked_by = {b.id: b.name for b in bookings}
-            text = format_schedule(selected, slots, booked_by)
+            booked_by = {b.id: {"name": b.name, "service": b.service_name} for b in bookings}
+            text = format_schedule(selected, slots, booked_by, public=False)  # Для админа с именами
             await call.message.answer(text, reply_markup=admin_menu_kb())  # type: ignore[union-attr]
             await state.set_state(AdminStates.choosing_action)
             await call.answer()
@@ -215,7 +273,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             return
 
         date_s = callback_data.date
-        time_s = callback_data.time
+        time_s = callback_data.unpack_time()  # Замена - обратно на :
         mode = callback_data.mode
 
         if mode == "add":
@@ -273,6 +331,28 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             return
 
         await call.answer("Неизвестный режим.", show_alert=True)
+
+    # ---- services management ----
+
+    @router.callback_query(AdminServiceCB.filter())
+    async def service_toggle_cb(call: CallbackQuery, callback_data: AdminServiceCB, state: FSMContext) -> None:
+        if not is_admin(call.from_user.id):
+            await call.answer("Нет доступа.", show_alert=True)
+            return
+
+        service = await db.get_service(callback_data.service_id)
+        if not service:
+            await call.answer("Услуга не найдена.", show_alert=True)
+            return
+
+        # Переключаем статус
+        new_status = not service["is_active"]
+        await db.toggle_service(callback_data.service_id, new_status)
+
+        # Обновляем список услуг
+        services = await db.list_services(active_only=False)
+        await call.message.edit_reply_markup(reply_markup=services_admin_kb(services))  # type: ignore[union-attr]
+        await call.answer(f"Услуга '{service['name']}' {'включена' if new_status else 'выключена'}")
 
     return router
 

@@ -24,10 +24,15 @@ class ReminderScheduler:
     bot: Bot
     db: Database
     timezone: str
+    _tz: ZoneInfo | None = None
+    _sched: AsyncIOScheduler | None = None
 
     def __post_init__(self) -> None:
-        self._tz = ZoneInfo(self.timezone)
-        self._sched = AsyncIOScheduler(timezone=self._tz)
+        tz = ZoneInfo(self.timezone)
+        sched = AsyncIOScheduler(timezone=tz)
+        # присвоения в локальные переменные выше, теперь в слоты
+        object.__setattr__(self, "_tz", tz)
+        object.__setattr__(self, "_sched", sched)
 
     @staticmethod
     def job_id_for(booking_id: int) -> str:

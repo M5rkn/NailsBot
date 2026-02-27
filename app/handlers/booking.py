@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from aiogram import Bot, Router
+from aiogram import Bot, Router, F
 from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.fsm.context import FSMContext
@@ -15,6 +15,7 @@ from app.fsm.states import BookingStates
 from app.keyboards.booking import BookingCB, TimeCB, cancel_confirm_kb, confirm_booking_kb, times_kb
 from app.keyboards.calendar import CalendarRange, CalCB, build_calendar
 from app.keyboards.common import MenuCB, SubCB, main_menu_kb, subscribe_required_kb
+from app.keyboards.services import ServiceCB, services_kb
 from app.scheduler.reminders import ReminderScheduler
 from app.utils.format import esc, format_schedule
 from app.utils.time import tznow
@@ -36,9 +37,14 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
     async def is_subscribed(bot: Bot, user_id: int) -> bool:
         try:
             member = await bot.get_chat_member(chat_id=cfg.channel_id, user_id=user_id)
-        except (TelegramBadRequest, TelegramForbiddenError):
+            return member.status in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
+        except TelegramForbiddenError:
+            # Бот не в канале или нет прав
             return False
-        return member.status in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
+        except TelegramBadRequest as e:
+            # Канал не найден или другая ошибка
+            print(f"[DEBUG] get_chat_member failed: {e}, channel_id={cfg.channel_id}, user_id={user_id}")
+            return False
 
     async def ensure_subscribed(call_or_msg, *, bot: Bot, user_id: int) -> bool:
         ok = await is_subscribed(bot, user_id)
@@ -48,7 +54,11 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         kb = subscribe_required_kb(cfg.channel_link)
         if isinstance(call_or_msg, CallbackQuery):
             await call_or_msg.message.answer(text, reply_markup=kb)  # type: ignore[union-attr]
-            await call_or_msg.answer()
+            try:
+                await call_or_msg.answer()
+            except TelegramBadRequest:
+                # query is too old - игнорируем
+                pass
         else:
             await call_or_msg.answer(text, reply_markup=kb)
         return False
@@ -59,40 +69,61 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         return CalendarRange(start=start, end=end)
 
     async def publish_schedule(bot: Bot, date_s: str) -> None:
+        is_closed = await db.is_day_closed(date_s)
+        if is_closed:
+            await bot.send_message(chat_id=cfg.schedule_channel_id, text=f"⛔ <b>{date_s}</b> — день закрыт")
+            return
+        
         slots = await db.list_slots(date_s)
         bookings = await db.list_bookings_by_date(date_s)
-        booked_by = {b.id: b.name for b in bookings}
-        text = format_schedule(date_s, slots, booked_by)
+        booked_by = {b.id: {"name": b.name, "service": b.service_name} for b in bookings}
+        text = format_schedule(date_s, slots, booked_by, public=True)  # Публичная версия без имён
         await bot.send_message(chat_id=cfg.schedule_channel_id, text=text)
 
     # -------- menu callbacks --------
 
-    @router.callback_query(MenuCB.filter(lambda c: c.action == "menu"))
+    @router.callback_query(MenuCB.filter(F.action == "menu"))
     async def menu_cb(call: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         is_admin = call.from_user.id == cfg.admin_id
         await call.message.answer("Выберите действие:", reply_markup=main_menu_kb(is_admin=is_admin))  # type: ignore[union-attr]
         await call.answer()
 
-    @router.callback_query(SubCB.filter(lambda c: c.action == "check"))
+    @router.callback_query(SubCB.filter(F.action == "check"))
     async def sub_check_cb(call: CallbackQuery, state: FSMContext) -> None:
         ok = await is_subscribed(call.bot, call.from_user.id)
         if not ok:
-            await call.answer("Подписка не найдена. Подпишитесь и попробуйте ещё раз.", show_alert=True)
+            try:
+                await call.answer("Подписка не найдена. Подпишитесь и попробуйте ещё раз.", show_alert=True)
+            except TelegramBadRequest:
+                # query is too old - игнорируем
+                pass
             return
-        await call.answer("✅ Подписка подтверждена!")
+        try:
+            await call.answer("✅ Подписка подтверждена!")
+        except TelegramBadRequest:
+            # query is too old - игнорируем
+            pass
         # Открываем календарь записи сразу
         await open_booking_calendar(call=call, state=state)
 
-    @router.callback_query(MenuCB.filter(lambda c: c.action == "book"))
+    @router.callback_query(MenuCB.filter(F.action == "book"))
     async def book_entry_cb(call: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         ok = await ensure_subscribed(call, bot=call.bot, user_id=call.from_user.id)
         if not ok:
             return
-        await open_booking_calendar(call=call, state=state)
+        # Показываем выбор услуг
+        services = await db.list_services(active_only=True)
+        if not services:
+            await call.message.answer("Услуги временно недоступны. Попробуйте позже.", reply_markup=main_menu_kb(is_admin=call.from_user.id == cfg.admin_id))  # type: ignore[union-attr]
+            await call.answer()
+            return
+        await state.set_state(BookingStates.choosing_service)
+        await call.message.answer("📋 <b>Выберите услугу:</b>", reply_markup=services_kb(services))  # type: ignore[union-attr]
+        await call.answer()
 
-    @router.callback_query(MenuCB.filter(lambda c: c.action == "my"))
+    @router.callback_query(MenuCB.filter(F.action == "my"))
     async def my_booking_cb(call: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         b = await db.get_user_active_booking(call.from_user.id)
@@ -112,6 +143,22 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         await state.update_data(cancel_booking_id=b.id)
         await call.message.answer(text, reply_markup=cancel_confirm_kb())  # type: ignore[union-attr]
         await call.answer()
+
+    # -------- service selection --------
+
+    @router.callback_query(ServiceCB.filter())
+    async def service_selected_cb(call: CallbackQuery, callback_data: ServiceCB, state: FSMContext) -> None:
+        ok = await ensure_subscribed(call, bot=call.bot, user_id=call.from_user.id)
+        if not ok:
+            return
+
+        service = await db.get_service(callback_data.service_id)
+        if not service:
+            await call.answer("Услуга не найдена.", show_alert=True)
+            return
+
+        await state.update_data(service_id=service["id"], service_name=service["name"])
+        await open_booking_calendar(call=call, state=state)
 
     # -------- calendar / times --------
 
@@ -143,7 +190,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         await call.message.answer("🗓 <b>Выберите дату для записи</b>", reply_markup=cal_kb)  # type: ignore[union-attr]
         await call.answer()
 
-    @router.callback_query(CalCB.filter(lambda c: c.scope == "user"))
+    @router.callback_query(CalCB.filter(F.scope == "user"))
     async def calendar_user_cb(call: CallbackQuery, callback_data: CalCB, state: FSMContext) -> None:
         ok = await ensure_subscribed(call, bot=call.bot, user_id=call.from_user.id)
         if not ok:
@@ -178,7 +225,11 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             await call.answer("Эта дата недоступна.", show_alert=True)
             return
 
-        free_times = await db.list_free_slots(selected)
+        # Получаем service_id из состояния
+        data = await state.get_data()
+        service_id = data.get("service_id")
+        
+        free_times = await db.list_free_slots(selected, service_id)
         if not free_times:
             await call.answer("Свободных слотов нет.", show_alert=True)
             return
@@ -197,12 +248,15 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         if not ok:
             return
 
-        free = await db.list_free_slots(callback_data.date)
-        if callback_data.time not in free:
+        time_s = callback_data.unpack_time()  # Замена - обратно на :
+        data = await state.get_data()
+        service_id = data.get("service_id")
+        free = await db.list_free_slots(callback_data.date, service_id)
+        if time_s not in free:
             await call.answer("Этот слот уже занят. Выберите другое время.", show_alert=True)
             return
 
-        await state.update_data(date=callback_data.date, time=callback_data.time)
+        await state.update_data(date=callback_data.date, time=time_s)
         await state.set_state(BookingStates.entering_name)
         await call.message.answer("Введите <b>имя</b>:")  # type: ignore[union-attr]
         await call.answer()
@@ -229,12 +283,14 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         date_s = str(data.get("date", ""))
         time_s = str(data.get("time", ""))
         name = str(data.get("name", ""))
+        service_name = str(data.get("service_name", ""))
 
         await state.update_data(phone=phone)
         await state.set_state(BookingStates.confirming)
 
         text = (
             "✅ <b>Подтвердите запись</b>\n\n"
+            f"Услуга: <b>{esc(service_name)}</b>\n"
             f"Дата: <b>{esc(date_s)}</b>\n"
             f"Время: <b>{esc(time_s)}</b>\n"
             f"Имя: <b>{esc(name)}</b>\n"
@@ -242,13 +298,13 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         )
         await message.answer(text, reply_markup=confirm_booking_kb())
 
-    @router.callback_query(BookingCB.filter(lambda c: c.action == "cancel"))
+    @router.callback_query(BookingCB.filter(F.action == "cancel"))
     async def booking_cancel_cb(call: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         await call.message.answer("Ок, отменено.", reply_markup=main_menu_kb(is_admin=call.from_user.id == cfg.admin_id))  # type: ignore[union-attr]
         await call.answer()
 
-    @router.callback_query(BookingCB.filter(lambda c: c.action == "confirm"))
+    @router.callback_query(BookingCB.filter(F.action == "confirm"))
     async def booking_confirm_cb(call: CallbackQuery, state: FSMContext) -> None:
         ok = await ensure_subscribed(call, bot=call.bot, user_id=call.from_user.id)
         if not ok:
@@ -259,6 +315,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         time_s = str(data.get("time", ""))
         name = str(data.get("name", ""))
         phone = str(data.get("phone", ""))
+        service_id = data.get("service_id")
 
         # финальная проверка: есть ли активная запись
         already = await db.get_user_active_booking(call.from_user.id)
@@ -276,6 +333,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             name=name,
             phone=phone,
             created_at=created_at,
+            service_id=int(service_id) if service_id else None,
         )
         if not ok2:
             await call.message.answer(f"❌ {esc(str(res))}", reply_markup=main_menu_kb(is_admin=call.from_user.id == cfg.admin_id))  # type: ignore[union-attr]
@@ -284,11 +342,12 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             return
 
         booking: Booking = res  # type: ignore[assignment]
-        await deps.reminders.plan_for_booking(booking)
+        service_name = data.get("service_name", "—")
 
         # Сообщение пользователю
         await call.message.answer(  # type: ignore[union-attr]
             "🎉 <b>Запись подтверждена!</b>\n\n"
+            f"Услуга: <b>{esc(str(service_name))}</b>\n"
             f"Дата: <b>{esc(booking.date)}</b>\n"
             f"Время: <b>{esc(booking.time)}</b>\n"
             f"Имя: <b>{esc(booking.name)}</b>\n"
@@ -301,6 +360,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         uname = f"@{u.username}" if u.username else "—"
         admin_text = (
             "🆕 <b>Новая запись</b>\n\n"
+            f"Услуга: <b>{esc(str(service_name))}</b>\n"
             f"Дата: <b>{esc(booking.date)}</b>\n"
             f"Время: <b>{esc(booking.time)}</b>\n"
             f"Имя: <b>{esc(booking.name)}</b>\n"
@@ -317,7 +377,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
 
     # -------- Cancel booking (FSM) --------
 
-    @router.callback_query(BookingCB.filter(lambda c: c.action == "confirm_cancel"))
+    @router.callback_query(BookingCB.filter(F.action == "confirm_cancel"))
     async def cancel_confirm_cb(call: CallbackQuery, state: FSMContext) -> None:
         data = await state.get_data()
         booking_id = int(data.get("cancel_booking_id", 0) or 0)

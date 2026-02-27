@@ -19,6 +19,7 @@ def main_menu_kb(is_admin: bool) -> InlineKeyboardMarkup:
     kb.button(text="📌 Моя запись / Отмена", callback_data=MenuCB(action="my").pack())
     kb.button(text="💰 Прайсы", callback_data=MenuCB(action="prices").pack())
     kb.button(text="🖼 Портфолио", callback_data=MenuCB(action="portfolio").pack())
+    kb.button(text="📅 Расписание", url="https://t.me/myhappynailss")
     if is_admin:
         kb.button(text="🛠 Админ-панель", callback_data=MenuCB(action="admin").pack())
     kb.adjust(1)

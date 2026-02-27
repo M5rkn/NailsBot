@@ -15,6 +15,8 @@ class Booking:
     user_id: int
     date: str
     time: str
+    service_id: Optional[int]
+    service_name: Optional[str]
     name: str
     phone: str
     status: str
@@ -58,18 +60,28 @@ class Database:
               is_closed INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS services (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL,              -- Название услуги
+              price INTEGER NOT NULL,          -- Цена в рублях
+              duration INTEGER NOT NULL,       -- Длительность в минутах
+              is_active INTEGER NOT NULL DEFAULT 1
+            );
+
             CREATE TABLE IF NOT EXISTS bookings (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               user_id INTEGER NOT NULL,
               date TEXT NOT NULL,              -- YYYY-MM-DD
               time TEXT NOT NULL,              -- HH:MM
+              service_id INTEGER,
               name TEXT NOT NULL,
               phone TEXT NOT NULL,
               status TEXT NOT NULL DEFAULT 'active',  -- active/cancelled
               created_at TEXT NOT NULL,        -- YYYY-MM-DD HH:MM:SS
               reminder_job_id TEXT,
               remind_at TEXT,
-              remind_sent INTEGER NOT NULL DEFAULT 0
+              remind_sent INTEGER NOT NULL DEFAULT 0,
+              FOREIGN KEY(service_id) REFERENCES services(id)
             );
 
             CREATE TABLE IF NOT EXISTS slots (
@@ -89,6 +101,20 @@ class Database:
             """
         )
         await self.conn.commit()
+
+        # Добавим услуги по умолчанию, если их нет
+        cur = await self.conn.execute("SELECT COUNT(*) as cnt FROM services;")
+        row = await cur.fetchone()
+        if row["cnt"] == 0:
+            await self.conn.execute(
+                "INSERT INTO services(name, price, duration, is_active) VALUES (?, ?, ?, ?);",
+                ("Френч", 1000, 90, 1),
+            )
+            await self.conn.execute(
+                "INSERT INTO services(name, price, duration, is_active) VALUES (?, ?, ?, ?);",
+                ("Квадрат", 500, 60, 1),
+            )
+            await self.conn.commit()
 
     # -------- Working days / slots (admin) --------
 
@@ -144,7 +170,12 @@ class Database:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def list_free_slots(self, date: str) -> list[str]:
+    async def list_free_slots(self, date: str, service_id: Optional[int] = None) -> list[str]:
+        """
+        Получить свободные слоты на дату.
+        Если указан service_id — показываем только слоты, где хватает времени.
+        """
+        # Получаем все свободные слоты
         cur = await self.conn.execute(
             """
             SELECT time FROM slots
@@ -154,7 +185,22 @@ class Database:
             (date,),
         )
         rows = await cur.fetchall()
-        return [r["time"] for r in rows]
+        all_free = [r["time"] for r in rows]
+        
+        if not service_id:
+            return all_free
+        
+        # Если есть услуга — фильтруем по длительности
+        duration = await self.get_service_duration(service_id)
+        available = []
+        
+        for start_time in all_free:
+            required = self._get_required_slots(start_time, duration)
+            # Проверяем что все нужные слоты есть и свободны
+            if all(t in all_free for t in required):
+                available.append(start_time)
+        
+        return available
 
     async def list_available_dates(self, start_date: str, end_date: str) -> list[str]:
         """
@@ -178,12 +224,30 @@ class Database:
         rows = await cur.fetchall()
         return [r["date"] for r in rows]
 
+    async def list_dates_with_slots(self, start_date: str, end_date: str) -> list[str]:
+        """
+        Даты, где есть слоты (независимо от статуса).
+        start_date/end_date: YYYY-MM-DD (inclusive).
+        """
+        cur = await self.conn.execute(
+            """
+            SELECT DISTINCT s.date
+            FROM slots s
+            WHERE s.date BETWEEN ? AND ?
+            ORDER BY s.date ASC;
+            """,
+            (start_date, end_date),
+        )
+        rows = await cur.fetchall()
+        return [r["date"] for r in rows]
+
     # -------- Bookings (user/admin) --------
 
     async def get_user_active_booking(self, user_id: int) -> Optional[Booking]:
         cur = await self.conn.execute(
             """
-            SELECT * FROM bookings
+            SELECT b.*, s.name as service_name FROM bookings b
+            LEFT JOIN services s ON b.service_id = s.id
             WHERE user_id=? AND status='active'
             ORDER BY id DESC LIMIT 1;
             """,
@@ -192,22 +256,27 @@ class Database:
         row = await cur.fetchone()
         return self._row_to_booking(row) if row else None
 
-    async def get_booking(self, booking_id: int) -> Optional[Booking]:
-        cur = await self.conn.execute(
-            "SELECT * FROM bookings WHERE id=?;",
-            (booking_id,),
-        )
-        row = await cur.fetchone()
-        return self._row_to_booking(row) if row else None
-
     async def get_booking_by_slot(self, date: str, time: str) -> Optional[Booking]:
         cur = await self.conn.execute(
             """
-            SELECT b.* FROM bookings b
+            SELECT b.*, s.name as service_name FROM bookings b
+            LEFT JOIN services s ON b.service_id = s.id
             WHERE b.date=? AND b.time=? AND b.status='active'
             ORDER BY b.id DESC LIMIT 1;
             """,
             (date, time),
+        )
+        row = await cur.fetchone()
+        return self._row_to_booking(row) if row else None
+
+    async def get_booking(self, booking_id: int) -> Optional[Booking]:
+        cur = await self.conn.execute(
+            """
+            SELECT b.*, s.name as service_name FROM bookings b
+            LEFT JOIN services s ON b.service_id = s.id
+            WHERE b.id=?;
+            """,
+            (booking_id,),
         )
         row = await cur.fetchone()
         return self._row_to_booking(row) if row else None
@@ -220,6 +289,7 @@ class Database:
         name: str,
         phone: str,
         created_at: datetime,
+        service_id: Optional[int] = None,
     ) -> tuple[bool, str | Booking]:
         """
         Создать запись на слот (атомарно).
@@ -260,22 +330,49 @@ class Database:
                 await self.conn.execute("ROLLBACK;")
                 return False, "Этот слот уже занят."
 
+            # 3b) Если есть услуга — проверяем все слоты на длительность
+            required_slots = [time]
+            if service_id:
+                duration = await self.get_service_duration(service_id)
+                required_slots = self._get_required_slots(time, duration)
+                
+                # Проверяем что все слоты свободны
+                for slot_time in required_slots:
+                    cur = await self.conn.execute(
+                        "SELECT id, is_booked FROM slots WHERE date=? AND time=?;",
+                        (date, slot_time),
+                    )
+                    s = await cur.fetchone()
+                    if not s:
+                        await self.conn.execute("ROLLBACK;")
+                        return False, f"Слот {slot_time} недоступен."
+                    if int(s["is_booked"]) == 1:
+                        await self.conn.execute("ROLLBACK;")
+                        return False, f"Слот {slot_time} уже занят."
+
             # 4) Создаём запись
             created_at_s = created_at.strftime(DATETIME_FMT)
             cur = await self.conn.execute(
                 """
-                INSERT INTO bookings(user_id, date, time, name, phone, status, created_at)
-                VALUES (?, ?, ?, ?, ?, 'active', ?);
+                INSERT INTO bookings(user_id, date, time, service_id, name, phone, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'active', ?);
                 """,
-                (user_id, date, time, name, phone, created_at_s),
+                (user_id, date, time, service_id, name, phone, created_at_s),
             )
             booking_id = int(cur.lastrowid)
 
-            # 5) Бронируем слот
-            await self.conn.execute(
-                "UPDATE slots SET is_booked=1, booking_id=? WHERE id=?;",
-                (booking_id, int(slot["id"])),
-            )
+            # 5) Бронируем все слоты
+            for slot_time in required_slots:
+                cur = await self.conn.execute(
+                    "SELECT id FROM slots WHERE date=? AND time=?;",
+                    (date, slot_time),
+                )
+                s = await cur.fetchone()
+                if s:
+                    await self.conn.execute(
+                        "UPDATE slots SET is_booked=1, booking_id=? WHERE id=?;",
+                        (booking_id, int(s["id"])),
+                    )
 
             await self.conn.commit()
         except Exception:
@@ -321,7 +418,8 @@ class Database:
     async def list_bookings_by_date(self, date: str) -> list[Booking]:
         cur = await self.conn.execute(
             """
-            SELECT * FROM bookings
+            SELECT b.*, s.name as service_name FROM bookings b
+            LEFT JOIN services s ON b.service_id = s.id
             WHERE date=? AND status='active'
             ORDER BY time ASC;
             """,
@@ -377,6 +475,77 @@ class Database:
                 result.append(b)
         return result
 
+    # -------- Services --------
+
+    async def list_services(self, active_only: bool = True) -> list[dict[str, Any]]:
+        """Получить список услуг."""
+        if active_only:
+            cur = await self.conn.execute(
+                "SELECT id, name, price, duration, is_active FROM services WHERE is_active=1 ORDER BY id;"
+            )
+        else:
+            cur = await self.conn.execute(
+                "SELECT id, name, price, duration, is_active FROM services ORDER BY id;"
+            )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_service(self, service_id: int) -> Optional[dict[str, Any]]:
+        """Получить услугу по ID."""
+        cur = await self.conn.execute(
+            "SELECT id, name, price, duration, is_active FROM services WHERE id=?;",
+            (service_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_service_duration(self, service_id: int) -> int:
+        """Получить длительность услуги в минутах."""
+        cur = await self.conn.execute(
+            "SELECT duration FROM services WHERE id=?;",
+            (service_id,),
+        )
+        row = await cur.fetchone()
+        return int(row["duration"]) if row else 60
+
+    def _get_required_slots(self, start_time: str, duration_minutes: int) -> list[str]:
+        """
+        Рассчитать какие слоты нужны для услуги.
+        Слоты каждые 30 минут.
+        """
+        h, m = map(int, start_time.split(":"))
+        start_minutes = h * 60 + m
+        end_minutes = start_minutes + duration_minutes
+        
+        slots = []
+        current = start_minutes
+        while current < end_minutes:
+            h = current // 60
+            m = current % 60
+            if h > 23:
+                break
+            slots.append(f"{h:02d}:{m:02d}")
+            current += 30  # шаг 30 минут
+        
+        return slots
+
+    async def add_service(self, name: str, price: int, duration: int) -> int:
+        """Добавить услугу. Возвращает ID."""
+        cur = await self.conn.execute(
+            "INSERT INTO services(name, price, duration, is_active) VALUES (?, ?, ?, 1);",
+            (name, price, duration),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid)
+
+    async def toggle_service(self, service_id: int, active: bool) -> None:
+        """Включить/выключить услугу."""
+        await self.conn.execute(
+            "UPDATE services SET is_active=? WHERE id=?;",
+            (1 if active else 0, service_id),
+        )
+        await self.conn.commit()
+
     # -------- Utils --------
 
     @staticmethod
@@ -386,6 +555,8 @@ class Database:
             user_id=int(row["user_id"]),
             date=str(row["date"]),
             time=str(row["time"]),
+            service_id=row["service_id"],
+            service_name=row["service_name"],
             name=str(row["name"]),
             phone=str(row["phone"]),
             status=str(row["status"]),

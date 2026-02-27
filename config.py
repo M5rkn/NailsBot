@@ -13,11 +13,11 @@ class Config:
     admin_id: int
 
     # Обязательная подписка (требование)
-    channel_id: int
+    channel_id: str  # Теперь может быть юзернейм (@channel) или ID (-100...)
     channel_link: str
 
     # Канал для публикации расписания (отдельный канал)
-    schedule_channel_id: int
+    schedule_channel_id: str  # Теперь может быть юзернейм (@channel) или ID (-100...)
 
     # Системное
     timezone: str
@@ -35,13 +35,13 @@ def load_config() -> Config:
     if not admin_id:
         raise RuntimeError("ADMIN_ID is required in .env")
 
-    # Требование: CHANNEL_ID + CHANNEL_LINK в config.py
-    channel_id = int(os.getenv("CHANNEL_ID", "0"))
+    # Теперь поддерживаются юзернеймы (@channel) и ID (-100...)
+    channel_id = os.getenv("CHANNEL_ID", "").strip()
     channel_link = os.getenv("CHANNEL_LINK", "").strip()
     if not channel_id or not channel_link:
         raise RuntimeError("CHANNEL_ID and CHANNEL_LINK are required in .env")
 
-    schedule_channel_id = int(os.getenv("SCHEDULE_CHANNEL_ID", "0"))
+    schedule_channel_id = os.getenv("SCHEDULE_CHANNEL_ID", "").strip()
     if not schedule_channel_id:
         raise RuntimeError("SCHEDULE_CHANNEL_ID is required in .env (отдельный канал расписания)")
 
