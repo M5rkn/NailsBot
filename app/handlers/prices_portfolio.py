@@ -32,13 +32,13 @@ async def prices_cb(call: CallbackQuery) -> None:
             lines.append(f"▫️ <b>{s['name']}</b> — {s['price']}₽ ({dur_text})")
         text = "\n".join(lines)
 
-    await call.message.answer(text, reply_markup=back_to_menu_kb())  # type: ignore[union-attr]
+    await call.message.answer(text, reply_markup=back_to_menu_kb())  
     await call.answer()
 
 
 @router.callback_query(MenuCB.filter(F.action == "portfolio"))
 async def portfolio_cb(call: CallbackQuery) -> None:
-    # Требование: кнопка-ссылка на Pinterest
+    
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
     kb = InlineKeyboardMarkup(
@@ -47,6 +47,6 @@ async def portfolio_cb(call: CallbackQuery) -> None:
             [InlineKeyboardButton(text="⬅️ В меню", callback_data=MenuCB(action="menu").pack())],
         ]
     )
-    await call.message.answer("🖼 <b>Портфолио</b>", reply_markup=kb)  # type: ignore[union-attr]
+    await call.message.answer("🖼 <b>Портфолио</b>", reply_markup=kb)  
     await call.answer()
 
