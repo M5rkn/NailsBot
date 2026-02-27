@@ -118,12 +118,26 @@ class Database:
 
     # -------- Working days / slots (admin) --------
 
-    async def add_working_day(self, date: str) -> None:
+    async def add_working_day(self, date: str, auto_add_slots: bool = True) -> None:
         await self.conn.execute(
             "INSERT OR IGNORE INTO working_days(date, is_closed) VALUES (?, 0);",
             (date,),
         )
         await self.conn.commit()
+        
+        # Автоматически добавляем слоты 09:00 - 20:00 каждые 30 минут
+        if auto_add_slots:
+            hours = list(range(9, 21))
+            for h in hours:
+                for m in (0, 30):
+                    if h == 20 and m == 30:
+                        continue
+                    time_s = f"{h:02d}:{m:02d}"
+                    await self.conn.execute(
+                        "INSERT OR IGNORE INTO slots(date, time, is_booked) VALUES (?, ?, 0);",
+                        (date, time_s),
+                    )
+            await self.conn.commit()
 
     async def set_day_closed(self, date: str, closed: bool) -> None:
         await self.add_working_day(date)
