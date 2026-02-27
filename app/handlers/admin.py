@@ -165,6 +165,21 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         # else: для остальных действий — только свободные даты
 
         if callback_data.d == 0 and callback_data.nav in {"prev", "next"}:
+            # Пересчитываем данные при навигации
+            if action == "add_day":
+                allowed = all_dates_in_range(rng)
+                dates_with_slots = None
+            elif action == "view":
+                start_s = rng.start.strftime(DATE_FMT)
+                end_s = rng.end.strftime(DATE_FMT)
+                dates_with_slots = set(await db.list_dates_with_slots(start_s, end_s))
+                allowed = set()
+            else:
+                start_s = rng.start.strftime(DATE_FMT)
+                end_s = rng.end.strftime(DATE_FMT)
+                allowed = set(await db.list_available_dates(start_s, end_s))
+                dates_with_slots = None
+            
             month = date(callback_data.y, callback_data.m, 1)
             cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=rng, title="Выберите дату", dates_with_slots=dates_with_slots)
             await call.message.edit_reply_markup(reply_markup=cal_kb)  # type: ignore[union-attr]
@@ -178,9 +193,10 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         selected = date(callback_data.y, callback_data.m, callback_data.d).strftime(DATE_FMT)
 
         # ----- execute actions -----
-        if action == "add_day":
-            await db.add_working_day(selected)
-            await call.message.answer(f"✅ Рабочий день добавлен: <b>{esc(selected)}</b>", reply_markup=admin_menu_kb())  # type: ignore[union-attr]
+        if action == "open_day":
+            await db.set_day_closed(selected, False)
+            await call.message.answer(f"✅ День открыт: <b>{esc(selected)}</b>", reply_markup=admin_menu_kb())  # type: ignore[union-attr]
+            await publish_schedule(call, selected)
             await state.set_state(AdminStates.choosing_action)
             await call.answer()
             return
@@ -193,10 +209,9 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             await call.answer()
             return
 
-        if action == "open_day":
-            await db.set_day_closed(selected, False)
-            await call.message.answer(f"✅ День открыт: <b>{esc(selected)}</b>", reply_markup=admin_menu_kb())  # type: ignore[union-attr]
-            await publish_schedule(call, selected)
+        if action == "add_day":
+            await db.add_working_day(selected, auto_add_slots=True)
+            await call.message.answer(f"✅ Рабочий день добавлен: <b>{esc(selected)}</b>", reply_markup=admin_menu_kb())  # type: ignore[union-attr]
             await state.set_state(AdminStates.choosing_action)
             await call.answer()
             return
