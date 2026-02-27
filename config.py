@@ -12,12 +12,12 @@ class Config:
     bot_token: str
     admin_id: int
 
-    # Обязательная подписка (требование)
-    channel_id: str  # Теперь может быть юзернейм (@channel) или ID (-100...)
+    # Обязательная подписка
+    channel_id: str 
     channel_link: str
 
-    # Канал для публикации расписания (отдельный канал)
-    schedule_channel_id: str  # Теперь может быть юзернейм (@channel) или ID (-100...)
+    # Канал для публикации расписания
+    schedule_channel_id: str 
 
     # Системное
     timezone: str
@@ -35,7 +35,7 @@ def load_config() -> Config:
     if not admin_id:
         raise RuntimeError("ADMIN_ID is required in .env")
 
-    # Теперь поддерживаются юзернеймы (@channel) и ID (-100...)
+    
     channel_id = os.getenv("CHANNEL_ID", "").strip()
     channel_link = os.getenv("CHANNEL_LINK", "").strip()
     if not channel_id or not channel_link:

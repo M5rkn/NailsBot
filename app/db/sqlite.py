@@ -102,7 +102,7 @@ class Database:
         )
         await self.conn.commit()
 
-        # Добавим услуги по умолчанию, если их нет
+
         cur = await self.conn.execute("SELECT COUNT(*) as cnt FROM services;")
         row = await cur.fetchone()
         if row["cnt"] == 0:
@@ -116,7 +116,7 @@ class Database:
             )
             await self.conn.commit()
 
-    # -------- Working days / slots (admin) --------
+   
 
     async def add_working_day(self, date: str, auto_add_slots: bool = True) -> None:
         await self.conn.execute(
@@ -125,7 +125,7 @@ class Database:
         )
         await self.conn.commit()
         
-        # Автоматически добавляем слоты 09:00 - 20:00 каждые 30 минут
+        
         if auto_add_slots:
             hours = list(range(9, 21))
             for h in hours:
@@ -205,7 +205,7 @@ class Database:
         Получить свободные слоты на дату.
         Если указан service_id — показываем только слоты, где хватает времени.
         """
-        # Получаем все свободные слоты
+      
         cur = await self.conn.execute(
             """
             SELECT time FROM slots
@@ -220,13 +220,13 @@ class Database:
         if not service_id:
             return all_free
         
-        # Если есть услуга — фильтруем по длительности
+       
         duration = await self.get_service_duration(service_id)
         available = []
         
         for start_time in all_free:
             required = self._get_required_slots(start_time, duration)
-            # Проверяем что все нужные слоты есть и свободны
+            
             if all(t in all_free for t in required):
                 available.append(start_time)
         
@@ -272,7 +272,7 @@ class Database:
         rows = await cur.fetchall()
         return [r["date"] for r in rows]
 
-    # -------- Bookings (user/admin) --------
+    
 
     async def get_user_active_booking(self, user_id: int) -> Optional[Booking]:
         cur = await self.conn.execute(
@@ -326,7 +326,7 @@ class Database:
         Создать запись на слот (атомарно).
         Возвращает: (ok, booking | error_message)
         """
-        # Синхронизация: блокируем на запись транзакцией.
+        
         await self.conn.execute("BEGIN IMMEDIATE;")
         try:
             # 1) Проверка: пользователь уже имеет активную запись
@@ -459,7 +459,7 @@ class Database:
         rows = await cur.fetchall()
         return [self._row_to_booking(r) for r in rows]
 
-    # -------- Reminders --------
+
 
     async def set_booking_reminder(self, booking_id: int, job_id: str, remind_at: datetime) -> None:
         await self.conn.execute(
@@ -506,7 +506,7 @@ class Database:
                 result.append(b)
         return result
 
-    # -------- Services --------
+   
 
     async def list_services(self, active_only: bool = True) -> list[dict[str, Any]]:
         """Получить список услуг."""
@@ -556,7 +556,7 @@ class Database:
             if h > 23:
                 break
             slots.append(f"{h:02d}:{m:02d}")
-            current += 30  # шаг 30 минут
+            current += 30  
         
         return slots
 
@@ -577,7 +577,7 @@ class Database:
         )
         await self.conn.commit()
 
-    # -------- Utils --------
+ 
 
     @staticmethod
     def _row_to_booking(row: aiosqlite.Row) -> Booking:

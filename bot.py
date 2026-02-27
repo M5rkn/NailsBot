@@ -18,7 +18,7 @@ from app.scheduler.reminders import ReminderScheduler
 async def main() -> None:
     cfg = load_config()
 
-    # Готовим папку под базу
+
     db_dir = os.path.dirname(os.path.abspath(cfg.db_path))
     print(f"[DEBUG] DB path: {cfg.db_path}")
     print(f"[DEBUG] DB dir: {db_dir}")

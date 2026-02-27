@@ -32,17 +32,17 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
     router = Router()
     deps = BookingDeps(cfg=cfg, db=db, reminders=reminders)
 
-    # -------- helpers --------
+   
 
     async def is_subscribed(bot: Bot, user_id: int) -> bool:
         try:
             member = await bot.get_chat_member(chat_id=cfg.channel_id, user_id=user_id)
             return member.status in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
         except TelegramForbiddenError:
-            # Бот не в канале или нет прав
+          
             return False
         except TelegramBadRequest as e:
-            # Канал не найден или другая ошибка
+            
             print(f"[DEBUG] get_chat_member failed: {e}, channel_id={cfg.channel_id}, user_id={user_id}")
             return False
 
@@ -53,11 +53,11 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         text = "Для записи необходимо подписаться на канал"
         kb = subscribe_required_kb(cfg.channel_link)
         if isinstance(call_or_msg, CallbackQuery):
-            await call_or_msg.message.answer(text, reply_markup=kb)  # type: ignore[union-attr]
+            await call_or_msg.message.answer(text, reply_markup=kb)  
             try:
                 await call_or_msg.answer()
             except TelegramBadRequest:
-                # query is too old - игнорируем
+              
                 pass
         else:
             await call_or_msg.answer(text, reply_markup=kb)
@@ -77,16 +77,16 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         slots = await db.list_slots(date_s)
         bookings = await db.list_bookings_by_date(date_s)
         booked_by = {b.id: {"name": b.name, "service": b.service_name} for b in bookings}
-        text = format_schedule(date_s, slots, booked_by, public=True)  # Публичная версия без имён
+        text = format_schedule(date_s, slots, booked_by, public=True)  
         await bot.send_message(chat_id=cfg.schedule_channel_id, text=text)
 
-    # -------- menu callbacks --------
+    
 
     @router.callback_query(MenuCB.filter(F.action == "menu"))
     async def menu_cb(call: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         is_admin = call.from_user.id == cfg.admin_id
-        await call.message.answer("Выберите действие:", reply_markup=main_menu_kb(is_admin=is_admin))  # type: ignore[union-attr]
+        await call.message.answer("Выберите действие:", reply_markup=main_menu_kb(is_admin=is_admin)) 
         await call.answer()
 
     @router.callback_query(SubCB.filter(F.action == "check"))
@@ -96,15 +96,15 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             try:
                 await call.answer("Подписка не найдена. Подпишитесь и попробуйте ещё раз.", show_alert=True)
             except TelegramBadRequest:
-                # query is too old - игнорируем
+               
                 pass
             return
         try:
             await call.answer("✅ Подписка подтверждена!")
         except TelegramBadRequest:
-            # query is too old - игнорируем
+       
             pass
-        # Открываем календарь записи сразу
+        
         await open_booking_calendar(call=call, state=state)
 
     @router.callback_query(MenuCB.filter(F.action == "book"))
@@ -113,14 +113,14 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         ok = await ensure_subscribed(call, bot=call.bot, user_id=call.from_user.id)
         if not ok:
             return
-        # Показываем выбор услуг
+
         services = await db.list_services(active_only=True)
         if not services:
             await call.message.answer("Услуги временно недоступны. Попробуйте позже.", reply_markup=main_menu_kb(is_admin=call.from_user.id == cfg.admin_id))  # type: ignore[union-attr]
             await call.answer()
             return
         await state.set_state(BookingStates.choosing_service)
-        await call.message.answer("📋 <b>Выберите услугу:</b>", reply_markup=services_kb(services))  # type: ignore[union-attr]
+        await call.message.answer("📋 <b>Выберите услугу:</b>", reply_markup=services_kb(services))  
         await call.answer()
 
     @router.callback_query(MenuCB.filter(F.action == "my"))
