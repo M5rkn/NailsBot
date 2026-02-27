@@ -218,20 +218,19 @@ class Database:
 
     async def list_available_dates(self, start_date: str, end_date: str) -> list[str]:
         """
-        Даты, где день не закрыт и есть хотя бы один свободный слот.
+        Даты, где есть свободные слоты (независимо от working_days).
         start_date/end_date: YYYY-MM-DD (inclusive).
         """
         cur = await self.conn.execute(
             """
-            SELECT d.date
-            FROM working_days d
-            WHERE d.date BETWEEN ? AND ?
-              AND d.is_closed = 0
-              AND EXISTS (
-                SELECT 1 FROM slots s
-                WHERE s.date = d.date AND s.is_booked = 0
-              )
-            ORDER BY d.date ASC;
+            SELECT s.date
+            FROM slots s
+            LEFT JOIN working_days d ON s.date = d.date
+            WHERE s.date BETWEEN ? AND ?
+              AND (d.is_closed IS NULL OR d.is_closed = 0)
+              AND s.is_booked = 0
+            GROUP BY s.date
+            ORDER BY s.date ASC;
             """,
             (start_date, end_date),
         )
