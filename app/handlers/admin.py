@@ -89,6 +89,12 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
 
         rng = rng_today()
         
+        # Для действий с днями/слотами — показываем весь месяц, а не только от сегодня
+        admin_rng = CalendarRange(
+            start=date.today().replace(day=1),  # начало текущего месяца
+            end=rng.end
+        )
+
         # Получаем statuses для календаря
         start_s = rng.start.strftime(DATE_FMT)
         end_s = rng.end.strftime(DATE_FMT)
@@ -105,11 +111,19 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         closed_dates = {r["date"] for r in rows}
 
         if action == "add_day":
-            # Для добавления дня — все даты доступны
-            allowed = all_dates_in_range(rng)
+            # Для добавления дня — все даты доступны от начала месяца
+            allowed = all_dates_in_range(admin_rng)
             dates_with_slots = None
             closed_dates = set()
             open_dates = set()
+        elif action == "open_day":
+            # Для открытия дня — показываем только закрытые даты, чтобы их можно было выбрать
+            allowed = closed_dates  # Можно выбирать только закрытые дни
+            dates_with_slots = None
+        elif action == "close_day":
+            # Для закрытия дня — показываем только открытые даты
+            allowed = open_dates
+            dates_with_slots = None
         elif action == "view":
             # Для просмотра — показываем все даты со слотами
             pass
@@ -119,7 +133,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
 
         await state.set_state(AdminStates.choosing_date)
         await state.update_data(admin_action=action)
-        cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=rng, title="Выберите дату", dates_with_slots=dates_with_slots, closed_dates=closed_dates, open_dates=open_dates)
+        cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=admin_rng, title="Выберите дату", dates_with_slots=dates_with_slots, closed_dates=closed_dates, open_dates=open_dates)
 
         title_map = {
             "add_day": "➕ Добавить рабочий день",
@@ -155,6 +169,11 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             return
 
         rng = rng_today()
+        # Для действий с днями/слотами — показываем весь месяц, а не только от сегодня
+        admin_rng = CalendarRange(
+            start=date.today().replace(day=1),  # начало текущего месяца
+            end=rng.end
+        )
         data = await state.get_data()
         action = str(data.get("admin_action", ""))
 
@@ -174,11 +193,19 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         closed_dates = {r["date"] for r in rows}
 
         if action == "add_day":
-            # Для добавления дня — все даты доступны
-            allowed = all_dates_in_range(rng)
+            # Для добавления дня — все даты доступны от начала месяца
+            allowed = all_dates_in_range(admin_rng)
             dates_with_slots = None
             closed_dates = set()
             open_dates = set()
+        elif action == "open_day":
+            # Для открытия дня — показываем только закрытые даты
+            allowed = closed_dates
+            dates_with_slots = None
+        elif action == "close_day":
+            # Для закрытия дня — показываем только открытые даты
+            allowed = open_dates
+            dates_with_slots = None
         elif action == "view":
             # Для просмотра — показываем все даты со слотами
             pass
@@ -190,7 +217,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             end_s = rng.end.strftime(DATE_FMT)
 
             if action == "add_day":
-                allowed = all_dates_in_range(rng)
+                allowed = all_dates_in_range(admin_rng)
                 dates_with_slots = None
                 closed_dates = set()
                 open_dates = set()
@@ -198,6 +225,26 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
                 dates_with_slots = set(await db.list_dates_with_slots(start_s, end_s))
                 allowed = set(await db.list_available_dates(start_s, end_s))
                 open_dates = set(await db.list_open_dates(start_s, end_s))
+                cur = await db.conn.execute(
+                    "SELECT date FROM working_days WHERE date BETWEEN ? AND ? AND is_closed = 1;",
+                    (start_s, end_s),
+                )
+                rows = await cur.fetchall()
+                closed_dates = {r["date"] for r in rows}
+            elif action == "open_day":
+                # При навигации для открытия дня — показываем закрытые даты
+                cur = await db.conn.execute(
+                    "SELECT date FROM working_days WHERE date BETWEEN ? AND ? AND is_closed = 1;",
+                    (start_s, end_s),
+                )
+                rows = await cur.fetchall()
+                closed_dates = {r["date"] for r in rows}
+                allowed = closed_dates
+                dates_with_slots = None
+            elif action == "close_day":
+                # При навигации для закрытия дня — показываем открытые даты
+                allowed = set(await db.list_open_dates(start_s, end_s))
+                dates_with_slots = None
                 cur = await db.conn.execute(
                     "SELECT date FROM working_days WHERE date BETWEEN ? AND ? AND is_closed = 1;",
                     (start_s, end_s),
@@ -216,7 +263,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
                 closed_dates = {r["date"] for r in rows}
 
             month = date(callback_data.y, callback_data.m, 1)
-            cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=rng, title="Выберите дату", dates_with_slots=dates_with_slots, closed_dates=closed_dates, open_dates=open_dates)
+            cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=admin_rng, title="Выберите дату", dates_with_slots=dates_with_slots, closed_dates=closed_dates, open_dates=open_dates)
             await call.message.edit_reply_markup(reply_markup=cal_kb)  # type: ignore[union-attr]
             await call.answer()
             return

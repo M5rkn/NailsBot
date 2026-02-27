@@ -93,20 +93,26 @@ def build_calendar(
             day_str = day_date.strftime(DATE_FMT)
             weekday = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"][day_date.weekday()]
             
-            if day_str in closed_dates:
-                # День закрыт админом
+            if day_str in closed_dates and day_str not in allowed_dates:
+                # День закрыт админом и не в allowed (не для открытия)
                 kb.button(
                     text=f"⛔ {weekday}",
                     callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=0, nav="none").pack(),
                 )
-            elif day_str in open_dates:
-                # День открыт (независимо от наличия слотов)
+            elif day_str in closed_dates and day_str in allowed_dates:
+                # День закрыт, но в allowed — значит нужно его открыть (admin action)
+                kb.button(
+                    text=f"⛔ {day_num} {weekday}",
+                    callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=day_num, nav="none").pack(),
+                )
+            elif day_str in allowed_dates:
+                # День в allowed — кликабельный (для open_day/close_day или есть свободные слоты)
                 kb.button(
                     text=f"✅ {day_num} {weekday}",
                     callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=day_num, nav="none").pack(),
                 )
-            elif day_str in allowed_dates:
-                # Есть свободные слоты (день не в working_days, но слоты есть)
+            elif day_str in open_dates:
+                # День открыт (не в allowed, значит нет свободных слотов, но для просмотра показываем ✅)
                 kb.button(
                     text=f"✅ {day_num} {weekday}",
                     callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=day_num, nav="none").pack(),
