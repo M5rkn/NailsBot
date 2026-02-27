@@ -235,7 +235,9 @@ class Database:
             (start_date, end_date),
         )
         rows = await cur.fetchall()
-        return [r["date"] for r in rows]
+        result = [r["date"] for r in rows]
+        print(f"[DEBUG] list_available_dates({start_date}, {end_date}) = {result}")
+        return result
 
     async def list_dates_with_slots(self, start_date: str, end_date: str) -> list[str]:
         """

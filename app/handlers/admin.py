@@ -161,7 +161,8 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             dates_with_slots = None
         elif action == "view":
             # Для просмотра — показываем все даты со слотами
-            pass  # already set above
+            # allowed уже содержит даты со свободными слотами
+            pass
         # else: для остальных действий — только свободные даты
 
         if callback_data.d == 0 and callback_data.nav in {"prev", "next"}:
