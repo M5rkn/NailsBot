@@ -171,6 +171,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         start_s = rng.start.strftime(DATE_FMT)
         end_s = rng.end.strftime(DATE_FMT)
         available_dates = set(await db.list_available_dates(start_s, end_s))
+        open_dates = set(await db.list_open_dates(start_s, end_s))
 
         if not available_dates:
             await call.message.answer("Пока нет доступных слотов. Попробуйте позже.", reply_markup=main_menu_kb(is_admin=call.from_user.id == cfg.admin_id))  # type: ignore[union-attr]
@@ -184,6 +185,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             allowed_dates=available_dates,
             rng=rng,
             title="Выберите дату",
+            open_dates=open_dates,
         )
         if state is not None:
             await state.set_state(BookingStates.choosing_date)
@@ -200,6 +202,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         start_s = rng.start.strftime(DATE_FMT)
         end_s = rng.end.strftime(DATE_FMT)
         available_dates = set(await db.list_available_dates(start_s, end_s))
+        open_dates = set(await db.list_open_dates(start_s, end_s))
 
         # Навигация
         if callback_data.d == 0 and callback_data.nav in {"prev", "next"}:
@@ -210,6 +213,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
                 allowed_dates=available_dates,
                 rng=rng,
                 title="Выберите дату",
+                open_dates=open_dates,
             )
             await call.message.edit_reply_markup(reply_markup=cal_kb)  # type: ignore[union-attr]
             await call.answer()

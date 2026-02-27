@@ -46,21 +46,26 @@ def build_calendar(
     title: str,
     dates_with_slots: set[str] = None,
     closed_dates: set[str] = None,
+    open_dates: set[str] = None,
 ) -> InlineKeyboardMarkup:
     """
     Inline календарь на месяц.
     allowed_dates: множество YYYY-MM-DD, которые можно нажимать (есть свободные слоты).
     dates_with_slots: множество YYYY-MM-DD, где есть слоты (для определения занятых дней).
     closed_dates: множество YYYY-MM-DD, которые закрыты.
+    open_dates: множество YYYY-MM-DD, которые открыты (is_closed=0).
     rng: диапазон, в котором разрешена навигация.
     """
     kb = InlineKeyboardBuilder()
-    
+
     if dates_with_slots is None:
         dates_with_slots = allowed_dates
-    
+
     if closed_dates is None:
         closed_dates = set()
+
+    if open_dates is None:
+        open_dates = set()
 
     month_name = f"{pycal.month_name[month.month]} {month.year}"
     kb.button(
@@ -94,14 +99,20 @@ def build_calendar(
                     text=f"⛔ {weekday}",
                     callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=0, nav="none").pack(),
                 )
+            elif day_str in open_dates:
+                # День открыт (независимо от наличия слотов)
+                kb.button(
+                    text=f"✅ {day_num} {weekday}",
+                    callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=day_num, nav="none").pack(),
+                )
             elif day_str in allowed_dates:
-                # Доступно для записи (есть свободные слоты)
+                # Есть свободные слоты (день не в working_days, но слоты есть)
                 kb.button(
                     text=f"✅ {day_num} {weekday}",
                     callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=day_num, nav="none").pack(),
                 )
             elif day_str in dates_with_slots:
-                # Есть слоты, но все заняты — можно выбрать для просмотра
+                # Есть слоты, но день не добавлен в working_days
                 kb.button(
                     text=f"🈵 {day_num} {weekday}",
                     callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=day_num, nav="none").pack(),

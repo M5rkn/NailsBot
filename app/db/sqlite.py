@@ -155,6 +155,22 @@ class Database:
         row = await cur.fetchone()
         return bool(row["is_closed"]) if row else False
 
+    async def list_open_dates(self, start_date: str, end_date: str) -> list[str]:
+        """
+        Даты, которые открыты (is_closed = 0).
+        start_date/end_date: YYYY-MM-DD (inclusive).
+        """
+        cur = await self.conn.execute(
+            """
+            SELECT date FROM working_days
+            WHERE date BETWEEN ? AND ? AND is_closed = 0
+            ORDER BY date ASC;
+            """,
+            (start_date, end_date),
+        )
+        rows = await cur.fetchall()
+        return [r["date"] for r in rows]
+
     async def add_slot(self, date: str, time: str) -> bool:
         """Добавить слот. True если добавлен, False если уже был."""
         await self.add_working_day(date)
