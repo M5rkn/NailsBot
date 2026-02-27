@@ -45,17 +45,22 @@ def build_calendar(
     rng: CalendarRange,
     title: str,
     dates_with_slots: set[str] = None,
+    closed_dates: set[str] = None,
 ) -> InlineKeyboardMarkup:
     """
     Inline календарь на месяц.
     allowed_dates: множество YYYY-MM-DD, которые можно нажимать (есть свободные слоты).
     dates_with_slots: множество YYYY-MM-DD, где есть слоты (для определения занятых дней).
+    closed_dates: множество YYYY-MM-DD, которые закрыты.
     rng: диапазон, в котором разрешена навигация.
     """
     kb = InlineKeyboardBuilder()
     
     if dates_with_slots is None:
         dates_with_slots = allowed_dates
+    
+    if closed_dates is None:
+        closed_dates = set()
 
     month_name = f"{pycal.month_name[month.month]} {month.year}"
     kb.button(
@@ -82,16 +87,23 @@ def build_calendar(
                 continue
             day_str = day_date.strftime(DATE_FMT)
             weekday = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"][day_date.weekday()]
-            if day_str in allowed_dates:
+            
+            if day_str in closed_dates:
+                # День закрыт админом
+                kb.button(
+                    text=f"⛔ {weekday}",
+                    callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=0, nav="none").pack(),
+                )
+            elif day_str in allowed_dates:
                 # Доступно для записи (есть свободные слоты)
                 kb.button(
                     text=f"✅ {day_num} {weekday}",
                     callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=day_num, nav="none").pack(),
                 )
-            elif dates_with_slots and day_str in dates_with_slots:
+            elif day_str in dates_with_slots:
                 # Есть слоты, но все заняты — можно выбрать для просмотра
                 kb.button(
-                    text=f"⛔ {day_num} {weekday}",
+                    text=f"🈵 {day_num} {weekday}",
                     callback_data=CalCB(scope=scope, y=month.year, m=month.month, d=day_num, nav="none").pack(),
                 )
             else:
