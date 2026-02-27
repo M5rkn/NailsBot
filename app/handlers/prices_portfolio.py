@@ -5,14 +5,15 @@ from aiogram.types import CallbackQuery
 
 from app.db.sqlite import Database
 from app.keyboards.common import MenuCB, back_to_menu_kb
+from config import load_config
 
 router = Router()
 
 
 @router.callback_query(MenuCB.filter(F.action == "prices"))
 async def prices_cb(call: CallbackQuery) -> None:
-    # Требование: без FSM
-    db = Database("./data/bot.db")
+    cfg = load_config()
+    db = Database(cfg.db_path)
     await db.connect()
     services = await db.list_services(active_only=True)
     await db.close()
