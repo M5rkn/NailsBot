@@ -111,7 +111,7 @@ class ReminderScheduler:
 
         # Требование: текст напоминания (оставляем как в ТЗ)
         text = (
-            f"Напоминаем, что вы записаны на наращивание ресниц завтра в {booking.time}.\n"
+            f"Напоминаем, что вы записаны к мастеру завтра в {booking.time}.\n"
             f"Ждём вас ️"
         )
         await self.bot.send_message(chat_id=booking.user_id, text=text)

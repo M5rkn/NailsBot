@@ -375,6 +375,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
 
         # Канал расписания
         await publish_schedule(call.bot, booking.date)
+        await deps.reminders.plan_for_booking(booking)
 
         await state.clear()
         await call.answer()

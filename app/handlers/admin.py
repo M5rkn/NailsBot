@@ -127,13 +127,6 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         elif action == "view":
            
             pass
-        
-
-        month = date(rng.start.year, rng.start.month, 1)
-
-        await state.set_state(AdminStates.choosing_date)
-        await state.update_data(admin_action=action)
-        cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=admin_rng, title="Выберите дату", dates_with_slots=dates_with_slots, closed_dates=closed_dates, open_dates=open_dates)
 
         title_map = {
             "add_day": "➕ Добавить рабочий день",
@@ -156,7 +149,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
         
         await state.set_state(AdminStates.choosing_date)
         await state.update_data(admin_action=action)
-        cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=rng, title="Выберите дату", dates_with_slots=dates_with_slots, closed_dates=closed_dates, open_dates=open_dates)
+        cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=admin_rng, title="Выберите дату", dates_with_slots=dates_with_slots, closed_dates=closed_dates, open_dates=open_dates)
         await call.message.answer(f"<b>{esc(title)}</b>\nВыберите дату:", reply_markup=cal_kb)  # type: ignore[union-attr]
         await call.answer()
 
