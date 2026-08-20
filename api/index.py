@@ -25,7 +25,6 @@ _dp: Dispatcher | None = None
 _db: Database | None = None
 _scheduler: ReminderScheduler | None = None
 _initialized = False
-_lock = asyncio.Lock()
 
 
 async def _init():
@@ -33,35 +32,30 @@ async def _init():
     if _initialized:
         return
 
-    async with _lock:
-        if _initialized:
-            return
+    cfg = load_config()
 
-        cfg = load_config()
+    db_path = os.environ.get("DB_PATH", "/tmp/bot.db")
 
-        db_path = os.environ.get("DB_PATH", "/tmp/bot.db")
-        os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+    _bot = Bot(
+        token=cfg.bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
 
-        _bot = Bot(
-            token=cfg.bot_token,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        )
+    _dp = Dispatcher(storage=MemoryStorage())
 
-        _dp = Dispatcher(storage=MemoryStorage())
+    _db = Database(db_path)
+    await _db.connect()
+    await _db.init()
 
-        _db = Database(db_path)
-        await _db.connect()
-        await _db.init()
+    # Создаём планировщик но НЕ запускаем — на serverless он не нужен
+    _scheduler = ReminderScheduler(bot=_bot, db=_db, timezone=cfg.timezone)
 
-        _scheduler = ReminderScheduler(bot=_bot, db=_db, timezone=cfg.timezone)
-        await _scheduler.start()
+    _dp.include_router(start.router)
+    _dp.include_router(prices_portfolio.router)
+    _dp.include_router(booking.get_router(cfg=cfg, db=_db, reminders=_scheduler))
+    _dp.include_router(admin.get_router(cfg=cfg, db=_db, reminders=_scheduler))
 
-        _dp.include_router(start.router)
-        _dp.include_router(prices_portfolio.router)
-        _dp.include_router(booking.get_router(cfg=cfg, db=_db, reminders=_scheduler))
-        _dp.include_router(admin.get_router(cfg=cfg, db=_db, reminders=_scheduler))
-
-        _initialized = True
+    _initialized = True
 
 
 @app.post("/api/webhook")
