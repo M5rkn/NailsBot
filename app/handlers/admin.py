@@ -148,6 +148,7 @@ def get_router(*, cfg, db: Database, reminders: ReminderScheduler) -> Router:
             return
         
         await state.set_state(AdminStates.choosing_date)
+        month = date(rng.start.year, rng.start.month, 1)
         await state.update_data(admin_action=action)
         cal_kb = build_calendar(scope="admin", month=month, allowed_dates=allowed, rng=admin_rng, title="Выберите дату", dates_with_slots=dates_with_slots, closed_dates=closed_dates, open_dates=open_dates)
         await call.message.answer(f"<b>{esc(title)}</b>\nВыберите дату:", reply_markup=cal_kb)  # type: ignore[union-attr]
