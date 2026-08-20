@@ -58,7 +58,7 @@ async def _init():
         print("[INFO] Bot initialized successfully")
     except Exception as e:
         _init_error = traceback.format_exc()
-        print(f"[ERROR] _init failed: {_init_error}")
+        print(f"[ERROR] _init failed:\n{_init_error}")
         raise
 
 
@@ -77,22 +77,25 @@ async def webhook(request: Request):
 
 @app.get("/")
 async def health():
-    return {"status": "ok", "initialized": _initialized, "error": _init_error}
+    return {"status": "ok", "initialized": _initialized}
 
 
 @app.get("/debug")
 async def debug():
-    env_check = {
-        "BOT_TOKEN": "set" if os.environ.get("BOT_TOKEN") else "MISSING",
-        "ADMIN_ID": "set" if os.environ.get("ADMIN_ID") else "MISSING",
-        "CHANNEL_ID": os.environ.get("CHANNEL_ID", "MISSING"),
-        "CHANNEL_LINK": os.environ.get("CHANNEL_LINK", "MISSING"),
-        "SCHEDULE_CHANNEL_ID": os.environ.get("SCHEDULE_CHANNEL_ID", "MISSING"),
-        "DB_PATH": os.environ.get("DB_PATH", "/tmp/bot.db (default)"),
-    }
+    try:
+        await _init()
+    except Exception:
+        pass
     return {
         "initialized": _initialized,
         "init_error": _init_error,
-        "env": env_check,
+        "env": {
+            "BOT_TOKEN": "set" if os.environ.get("BOT_TOKEN") else "MISSING",
+            "ADMIN_ID": os.environ.get("ADMIN_ID", "MISSING"),
+            "CHANNEL_ID": os.environ.get("CHANNEL_ID", "MISSING"),
+            "CHANNEL_LINK": os.environ.get("CHANNEL_LINK", "MISSING"),
+            "SCHEDULE_CHANNEL_ID": os.environ.get("SCHEDULE_CHANNEL_ID", "MISSING"),
+            "DB_PATH": os.environ.get("DB_PATH", "/tmp/bot.db"),
+        },
         "python": sys.version,
     }
