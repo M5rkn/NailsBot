@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, BackgroundTasks
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -33,21 +33,17 @@ async def _init():
         return
 
     cfg = load_config()
-
     db_path = os.environ.get("DB_PATH", "/tmp/bot.db")
 
     _bot = Bot(
         token=cfg.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-
     _dp = Dispatcher(storage=MemoryStorage())
-
     _db = Database(db_path)
     await _db.connect()
     await _db.init()
 
-    # Создаём планировщик но НЕ запускаем — на serverless он не нужен
     _scheduler = ReminderScheduler(bot=_bot, db=_db, timezone=cfg.timezone)
 
     _dp.include_router(start.router)
@@ -58,12 +54,20 @@ async def _init():
     _initialized = True
 
 
+async def _process_update(data: dict):
+    try:
+        update = Update.model_validate(data, context={"bot": _bot})
+        await _dp.feed_update(_bot, update)
+    except Exception as e:
+        print(f"[ERROR] feed_update: {e}")
+
+
 @app.post("/api/webhook")
-async def webhook(request: Request):
+async def webhook(request: Request, background_tasks: BackgroundTasks):
     await _init()
     data = await request.json()
-    update = Update.model_validate(data, context={"bot": _bot})
-    await _dp.feed_update(_bot, update)
+    # Возвращаем 200 сразу — Telegram не будет ретраить
+    background_tasks.add_task(_process_update, data)
     return Response(status_code=200)
 
 
