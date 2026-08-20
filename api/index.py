@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, Request, Response, BackgroundTasks
+from fastapi import FastAPI, Request, Response
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -54,20 +53,15 @@ async def _init():
     _initialized = True
 
 
-async def _process_update(data: dict):
+@app.post("/api/webhook")
+async def webhook(request: Request):
     try:
+        await _init()
+        data = await request.json()
         update = Update.model_validate(data, context={"bot": _bot})
         await _dp.feed_update(_bot, update)
     except Exception as e:
-        print(f"[ERROR] feed_update: {e}")
-
-
-@app.post("/api/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks):
-    await _init()
-    data = await request.json()
-    # Возвращаем 200 сразу — Telegram не будет ретраить
-    background_tasks.add_task(_process_update, data)
+        print(f"[ERROR] webhook: {e}")
     return Response(status_code=200)
 
 
